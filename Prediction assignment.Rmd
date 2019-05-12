@@ -1,0 +1,139 @@
+---
+title: "Prediction assignment"
+author: "Alexandru Lazarescu"
+date: "5/12/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(caret)
+```
+
+## Synopsis
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways.
+The goal of our project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. 
+
+Description of the data is here: <http://web.archive.org/web/20170519033209/http://groupware.les.inf.puc-rio.br/public/papers/2013.Velloso.QAR-WLE.pdf>.
+
+## Loading data
+
+```{r loadingdata}
+prediction <- read.csv("./data/pml-training.csv", header = TRUE, na.strings = "NA")
+validation <- read.csv("./data/pml-testing.csv", header = TRUE, na.strings = "NA")
+dim(prediction)
+```
+
+We can see from the beginning that we have a lot of columns in the dataset. At a closer inspection and by reading the documentation of the dataset, we understand that there are some data aggregation rows (window=="yes") that calculate some interval based minimum, maximum, amplitude, skewness, average, sd, etc. We will use just the raw sensor data, so we are going to remove the precalculated rows.
+
+```{r window}
+pred_nowindow <- subset(prediction, new_window == "no")
+```
+
+Also, we just need the columns that contain the sensor data:
+```{r columns}
+col_names <- c("user_name", "classe")
+col_names <- c(col_names, paste(c("roll", "pitch", "yaw", "total_accel"), "belt", sep = "_"))
+col_names <- c(col_names, paste(c("roll", "pitch", "yaw", "total_accel"), "dumbbell", sep = "_"))
+col_names <- c(col_names, paste(c("roll", "pitch", "yaw", "total_accel"), "arm", sep = "_"))
+col_names <- c(col_names, paste(c("roll", "pitch", "yaw", "total_accel"), "forearm", sep = "_"))
+
+col_names <- c(col_names, paste("gyros", "belt", c("x", "y", "z"), sep = "_"))
+col_names <- c(col_names, paste("accel", "belt", c("x", "y", "z"), sep = "_"))
+col_names <- c(col_names, paste("magnet", "belt", c("x", "y", "z"), sep = "_"))
+
+col_names <- c(col_names, paste("gyros", "dumbbell", c("x", "y", "z"), sep = "_"))
+col_names <- c(col_names, paste("accel", "dumbbell", c("x", "y", "z"), sep = "_"))
+col_names <- c(col_names, paste("magnet", "dumbbell", c("x", "y", "z"), sep = "_"))
+
+col_names <- c(col_names, paste("gyros", "arm", c("x", "y", "z"), sep = "_"))
+col_names <- c(col_names, paste("accel", "arm", c("x", "y", "z"), sep = "_"))
+col_names <- c(col_names, paste("magnet", "arm", c("x", "y", "z"), sep = "_"))
+
+col_names <- c(col_names, paste("gyros", "forearm", c("x", "y", "z"), sep = "_"))
+col_names <- c(col_names, paste("accel", "forearm", c("x", "y", "z"), sep = "_"))
+col_names <- c(col_names, paste("magnet", "forearm", c("x", "y", "z"), sep = "_"))
+
+
+fin_pred <- pred_nowindow[, col_names]
+```
+
+Now, let's see some of the data. We'll just plot the belt sensor for now:
+```{r plots}
+g <- ggplot(fin_pred)
+g <- g + geom_point(aes(x = roll_belt, y = pitch_belt, color = classe))
+g <- g + facet_wrap( ~ user_name, nrow = 1)
+g
+
+g <- ggplot(fin_pred)
+g <- g + geom_point(aes(x = yaw_belt, y = total_accel_belt, color = classe))
+g <- g + facet_wrap( ~ user_name, nrow = 1)
+g
+```
+
+We can see that for some classes, some sensor axis can be very helpful, but it is pretty tied to the person doing the exercise, so we will also use the persons as predictors. we are not ploting the other variables, the pattern remains with differences between subjects, some classes of exercises are better predicted by different sensors.
+
+## Cross validation
+
+At this point we have two datasets: one for training the model and the validation one (20 records to predict the classe variable).
+We will use the training model and split it in training and testing datasets.
+```{r cross}
+set.seed(13231)
+rowpart <- createDataPartition(fin_pred$classe, p = 0.7, list = FALSE)
+training <- fin_pred[rowpart, ]
+testing <- fin_pred[-rowpart, ]
+```
+
+We need to check to see we have all the subjects represented in both datasets:
+```{r check}
+summary(training$user_name)
+summary(testing$user_name)
+```
+
+## Building the models
+
+We will use two models for training of classe variable dependent on all the other variables (all the sensor readings and person names): decision trees (rpart) and random forests. We will decide which one we will use on the validation data after we see the results on the test data.
+
+```{r rpart}
+modFit1 <- train(classe ~ ., method = "rpart", data = training)
+res1 <- predict(modFit1, testing)
+cnf1 <- confusionMatrix(testing$classe, res1)
+cnf1
+
+plot(cnf1$table, main = "Decision tree confusion matrix")
+```
+
+We can see that rpart has a quite low accuracy (56%).
+For the random forest we decided to limit the number of trees to 64 because of the calculation speed. We will check the error rate and see if we need to increase it.
+
+```{r rf}
+modFit2 <- train(classe ~ ., method = "rf", data = training, ntree=64)
+res2 <- predict(modFit2, testing)
+cnf2 <- confusionMatrix(testing$classe, res2)
+cnf2
+plot(cnf2$table, main = "Random forest confusion matrix")
+```
+
+The accuracy is much higher (98%) so it is clearly a much better model than the previous. We expect the out of sample error rate to be similar to the out of bounds error rate (OOB rate of 0.8%).
+
+Because we limited the number of trees to 64, let's see if we could improve the prediction dramatically by increasing the number. We will plot the error rates by the number of trees:
+```{r treesplot}
+plot(x=1:64, y=modFit2$finalModel$err.rate[,1], type="l", xlab = "Number of trees", ylab = "Error rate", main = "Random forest error rate per number of trees")
+```
+
+It is clear now that after 40 trees the decrease in error is very small so it does not make sense to increase the number of trees.
+This is the model of choice.
+```{r summ}
+modFit2$finalModel
+```
+
+## Predicting the 20 cases
+
+In the end, we will use our model of choice (random forests) to predict the results in the validation dataset and respond to the final quiz.
+```{r finalprediction}
+final_predictions <- predict(modFit2, validation)
+final_predictions
+```
+
